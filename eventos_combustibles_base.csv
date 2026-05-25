@@ -1,0 +1,11 @@
+fecha,categoria,evento,canal,impacto_esperado,intensidad,comentario,fuente
+2020-03-11,salud/demanda,Declaratoria de pandemia COVID-19,demanda,bajista,5,Caída abrupta de movilidad y demanda global de combustibles,OMS / contexto público
+2020-04-20,mercado financiero,WTI registra precios negativos en contratos de corto plazo,inventarios/mercado,volatilidad alta,5,"Evento extremo asociado a exceso de oferta, almacenamiento e incertidumbre",EIA / prensa financiera
+2022-02-24,geopolítica,Inicio de la invasión rusa a Ucrania,oferta/geopolítica,alcista,5,Aumenta el riesgo percibido sobre oferta energética y comercio internacional,contexto público
+2022-03-08,sanciones,Restricciones y sanciones energéticas vinculadas a Rusia,oferta/geopolítica,alcista,4,Incrementa incertidumbre sobre disponibilidad y flujos comerciales de crudo/productos,contexto público
+2022-10-05,oferta,Anuncio OPEP+ de recortes de producción,oferta,alcista,4,La expectativa de menor oferta puede presionar precios internacionales,contexto público
+2023-10-07,geopolítica,Escalada del conflicto en Medio Oriente,geopolítica/riesgo,volatilidad alta,4,Aumenta prima de riesgo geopolítico en mercados energéticos,contexto público
+2023-12-15,logística,Tensiones y desvíos marítimos en el Mar Rojo,logística/fletes,alcista,4,Riesgos sobre rutas marítimas pueden presionar fletes y tiempos de entrega,contexto público
+2024-04-01,oferta,Extensión de recortes voluntarios de producción OPEP+,oferta,alcista,3,Restricciones de oferta pueden sostener precios internacionales,contexto público
+2024-09-01,demanda,Señales de menor crecimiento económico global,demanda,bajista,2,Menores expectativas de demanda pueden limitar aumentos de precios,contexto público
+2025-01-15,logística,Riesgos logísticos y de transporte marítimo en rutas internacionales,logística/fletes,volatilidad media,3,Los cambios en fletes pueden abrir brechas entre proxy internacional y costo de importación,contexto público
