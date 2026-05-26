@@ -28,7 +28,12 @@ EVENTOS_PATH = "eventos_combustibles_base.csv"
 
 def leer_archivo_eia(url: str, nombre_variable: str) -> pd.DataFrame:
     """Lee archivos históricos XLS de EIA desde la hoja Data 1."""
-    df_raw = pd.read_excel(url, sheet_name="Data 1", skiprows=2)
+    df_raw = pd.read_excel(
+    url,
+    sheet_name="Data 1",
+    skiprows=2,
+    engine="openpyxl"
+)
     df_raw = df_raw.dropna(how="all")
 
     fecha_col = df_raw.columns[0]
