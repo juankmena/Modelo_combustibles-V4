@@ -4,3 +4,4 @@ numpy
 plotly
 scikit-learn
 openpyxl
+xlrd>=2.0.1

@@ -27,13 +27,32 @@ EVENTOS_PATH = "eventos_combustibles_base.csv"
 
 
 def leer_archivo_eia(url: str, nombre_variable: str) -> pd.DataFrame:
-    """Lee archivos históricos XLS de EIA desde la hoja Data 1."""
-    df_raw = pd.read_excel(
-    url,
-    sheet_name="Data 1",
-    skiprows=2,
-    engine="openpyxl"
-)
+    """Lee archivos históricos XLS de EIA desde la hoja Data 1.
+
+    Los archivos históricos de EIA usados por esta app son .xls antiguos.
+    Por eso se debe usar xlrd, no openpyxl. openpyxl solo funciona con .xlsx
+    y produce BadZipFile cuando se intenta leer un .xls.
+    """
+    try:
+        df_raw = pd.read_excel(
+            url,
+            sheet_name="Data 1",
+            skiprows=2,
+            engine="xlrd"
+        )
+    except ImportError as exc:
+        st.error(
+            "Falta instalar la dependencia xlrd para leer los archivos .xls de EIA. "
+            "Agregue 'xlrd>=2.0.1' al requirements.txt y vuelva a desplegar la app."
+        )
+        raise exc
+    except Exception as exc:
+        st.error(
+            "No fue posible leer el archivo histórico de EIA. "
+            "Verifique conexión a internet, disponibilidad del enlace y formato del archivo."
+        )
+        raise exc
+
     df_raw = df_raw.dropna(how="all")
 
     fecha_col = df_raw.columns[0]
