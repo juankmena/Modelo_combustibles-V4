@@ -596,19 +596,57 @@ def texto_eventos_interpretacion(eventos_filtrados: pd.DataFrame) -> str:
 
 
 def agregar_eventos_a_figura(fig, eventos: pd.DataFrame, max_eventos: int = 20):
-    """Añade marcadores verticales a una figura Plotly sin saturarla."""
-    if eventos.empty:
+    """Añade marcadores verticales a una figura Plotly sin saturarla.
+
+    Nota técnica:
+    En algunas versiones de Plotly/Streamlit Cloud, `add_vline` con fechas
+    tipo pandas Timestamp y `annotation_text` genera TypeError porque Plotly
+    intenta promediar fechas internamente. Para evitarlo, convertimos la fecha
+    a texto ISO y separamos la línea vertical de la anotación.
+    """
+    if eventos is None or eventos.empty:
         return fig
-    ev = eventos.sort_values(["intensidad", "fecha"], ascending=[False, True]).head(max_eventos)
+
+    ev = eventos.copy()
+    ev["fecha"] = pd.to_datetime(ev["fecha"], errors="coerce")
+    ev = ev.dropna(subset=["fecha"])
+    if ev.empty:
+        return fig
+
+    sort_cols = [c for c in ["intensidad", "fecha"] if c in ev.columns]
+    if "intensidad" in ev.columns:
+        ev = ev.sort_values(["intensidad", "fecha"], ascending=[False, True]).head(max_eventos)
+    else:
+        ev = ev.sort_values("fecha").head(max_eventos)
+
     for _, row in ev.iterrows():
+        x_val = row["fecha"].strftime("%Y-%m-%d")
         label = str(row.get("categoria", "Evento"))[:18]
-        fig.add_vline(
-            x=row["fecha"],
-            line_width=1,
-            line_dash="dot",
-            annotation_text=label,
-            annotation_position="top left"
+
+        fig.add_shape(
+            type="line",
+            xref="x",
+            yref="paper",
+            x0=x_val,
+            x1=x_val,
+            y0=0,
+            y1=1,
+            line=dict(width=1, dash="dot"),
         )
+
+        fig.add_annotation(
+            x=x_val,
+            y=1,
+            xref="x",
+            yref="paper",
+            text=label,
+            showarrow=False,
+            yanchor="bottom",
+            xanchor="left",
+            textangle=-90,
+            font=dict(size=10),
+        )
+
     return fig
 
 def pie_autor():
