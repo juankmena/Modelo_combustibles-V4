@@ -1023,13 +1023,29 @@ if ejecutar:
             c2.metric("Intensidad promedio", f"{eventos_filtrados['intensidad'].mean():,.2f}" if not eventos_filtrados.empty else "-")
             c3.metric("Máxima intensidad", f"{eventos_filtrados['intensidad'].max():,.0f}" if not eventos_filtrados.empty else "-")
 
+            st.markdown("### CSV de eventos vigente")
+            st.write(
+                "Descargue la base de eventos que la app está usando actualmente. "
+                "Este archivo puede editarse, enriquecerse y luego volver a subirse desde la barra lateral."
+            )
+
+            col_descarga_1, col_descarga_2 = st.columns([1, 2])
+            with col_descarga_1:
+                st.download_button(
+                    "Descargar CSV actual de eventos",
+                    csv_eventos_descarga(df_eventos),
+                    file_name="eventos_geopoliticos_energia_actual.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
             st.markdown("### Actualización semiautomática de noticias")
             st.write(
                 "La app puede consultar noticias recientes en GDELT, unirlas con la base curada y generar un CSV actualizado. "
                 "Como Streamlit Cloud no guarda cambios permanentes en el repositorio, descargue el CSV actualizado y vuelva a subirlo desde la barra lateral en futuras ejecuciones."
             )
 
-            with st.expander("Consultar noticias recientes en GDELT y construir CSV actualizado"):
+            with st.expander("Consultar noticias recientes en GDELT y construir CSV actualizado", expanded=True):
                 temas_default = [
                     "oil price",
                     "OPEC production cut",
@@ -1074,7 +1090,7 @@ if ejecutar:
                         st.dataframe(noticias_gdelt.sort_values("fecha", ascending=False), use_container_width=True)
 
                         st.download_button(
-                            "Descargar CSV actualizado de eventos",
+                            "Descargar CSV actualizado con noticias GDELT",
                             csv_eventos_descarga(eventos_actualizados),
                             file_name="eventos_geopoliticos_energia_actualizado.csv",
                             mime="text/csv"
