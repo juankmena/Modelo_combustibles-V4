@@ -799,7 +799,11 @@ def pie_autor():
 with st.sidebar:
     st.header("Opciones")
     st.write("Presioná el botón para descargar datos EIA, entrenar el modelo y generar la predicción.")
-    ejecutar = st.button("Actualizar datos y entrenar modelo", type="primary")
+    ejecutar_click = st.button("Actualizar datos y entrenar modelo", type="primary")
+    if ejecutar_click:
+        st.session_state["modelo_ejecutado"] = True
+        st.session_state["forzar_reentrenamiento"] = True
+    ejecutar = st.session_state.get("modelo_ejecutado", False)
     st.divider()
     st.subheader("Compras Recope")
     archivo_recope = st.file_uploader("CSV compras Recope", type=["csv"], help="Opcional. Si no se carga archivo, la app intenta usar 2016-2026_abril.csv en la carpeta del proyecto.")
@@ -819,10 +823,20 @@ with st.sidebar:
     st.caption("Fuente EIA: archivos históricos públicos. Fuente Recope: CSV suministrado por el usuario.")
 
 if ejecutar:
-    with st.spinner("Descargando datos EIA y entrenando modelo..."):
-        df = cargar_datos()
-        salida = preparar_modelo(df)
-        historico = guardar_historico(salida["fecha_base"], salida["periodo_predicho"], salida["pred_final"], salida["prob_final"])
+    if st.session_state.get("forzar_reentrenamiento", False) or "df_modelo" not in st.session_state or "salida_modelo" not in st.session_state:
+        with st.spinner("Descargando datos EIA y entrenando modelo..."):
+            df = cargar_datos()
+            salida = preparar_modelo(df)
+            historico = guardar_historico(salida["fecha_base"], salida["periodo_predicho"], salida["pred_final"], salida["prob_final"])
+
+        st.session_state["df_modelo"] = df
+        st.session_state["salida_modelo"] = salida
+        st.session_state["historico_modelo"] = historico
+        st.session_state["forzar_reentrenamiento"] = False
+    else:
+        df = st.session_state["df_modelo"]
+        salida = st.session_state["salida_modelo"]
+        historico = st.session_state.get("historico_modelo", pd.DataFrame())
 
     pred_texto = "Sube" if salida["pred_final"] == 1 else "No sube"
 
