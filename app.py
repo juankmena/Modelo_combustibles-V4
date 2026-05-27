@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import requests
+import time
 import streamlit as st
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import GridSearchCV, cross_val_score
@@ -594,10 +595,12 @@ def estimar_impacto_evento(texto: str) -> str:
     return "por clasificar"
 
 
-def consultar_gdelt_noticias(query: str, dias: int = 30, max_records: int = 50) -> pd.DataFrame:
-    """Consulta noticias recientes en GDELT DOC 2.0 y las transforma al formato de eventos de la app.
+def consultar_gdelt_noticias(query: str, dias: int = 30, max_records: int = 25, reintentos: int = 2) -> pd.DataFrame:
+    """Consulta noticias recientes en GDELT DOC 2.0 y las transforma al formato de eventos.
 
-    GDELT no requiere API key. La consulta usa el modo ArtList y formato JSON.
+    Nota operativa:
+    GDELT puede devolver 429 Too Many Requests si se hacen muchas consultas seguidas.
+    Por eso esta función incluye pausa y reintento controlado.
     """
     url = "https://api.gdeltproject.org/api/v2/doc/doc"
     params = {
@@ -609,48 +612,64 @@ def consultar_gdelt_noticias(query: str, dias: int = 30, max_records: int = 50) 
         "timespan": f"{int(dias)}d",
     }
 
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-    articulos = data.get("articles", [])
+    ultimo_error = None
 
-    filas = []
-    for art in articulos:
-        titulo = art.get("title", "")
-        url_art = art.get("url", "")
-        dominio = art.get("domain", "")
-        fuente_pais = art.get("sourcecountry", "")
-        fecha_raw = art.get("seendate", "") or art.get("datetime", "")
+    for intento in range(reintentos + 1):
+        try:
+            r = requests.get(url, params=params, timeout=40)
 
-        fecha = pd.to_datetime(fecha_raw, errors="coerce")
-        if pd.isna(fecha):
-            fecha = pd.to_datetime(str(fecha_raw)[:14], format="%Y%m%d%H%M%S", errors="coerce")
-        if pd.isna(fecha):
-            fecha = pd.to_datetime(str(fecha_raw)[:8], format="%Y%m%d", errors="coerce")
-        if pd.isna(fecha):
-            continue
+            if r.status_code == 429:
+                ultimo_error = "GDELT respondió 429 Too Many Requests. Espere unos minutos o use menos noticias/menos consultas."
+                time.sleep(3 + intento * 3)
+                continue
 
-        texto = f"{titulo} {dominio} {url_art}"
-        canal = clasificar_canal_evento(texto)
-        impacto = estimar_impacto_evento(texto)
+            r.raise_for_status()
+            data = r.json()
+            articulos = data.get("articles", [])
+            filas = []
 
-        filas.append({
-            "fecha": fecha.normalize(),
-            "categoria": "Noticia GDELT",
-            "evento": titulo,
-            "canal": canal,
-            "impacto_esperado": impacto,
-            "intensidad": 2,
-            "comentario": f"Noticia reciente detectada por GDELT. País fuente: {fuente_pais}.",
-            "fuente": url_art or dominio,
-        })
+            for art in articulos:
+                titulo = art.get("title", "")
+                url_art = art.get("url", "")
+                dominio = art.get("domain", "")
+                fuente_pais = art.get("sourcecountry", "")
+                fecha_raw = art.get("seendate", "") or art.get("datetime", "")
 
-    if not filas:
-        return pd.DataFrame(columns=["fecha", "categoria", "evento", "canal", "impacto_esperado", "intensidad", "comentario", "fuente"])
+                fecha = pd.to_datetime(fecha_raw, errors="coerce")
+                if pd.isna(fecha):
+                    fecha = pd.to_datetime(str(fecha_raw)[:14], format="%Y%m%d%H%M%S", errors="coerce")
+                if pd.isna(fecha):
+                    fecha = pd.to_datetime(str(fecha_raw)[:8], format="%Y%m%d", errors="coerce")
+                if pd.isna(fecha):
+                    continue
 
-    out = pd.DataFrame(filas)
-    out = out.drop_duplicates(subset=["fecha", "evento", "fuente"])
-    return out.sort_values("fecha", ascending=False).reset_index(drop=True)
+                texto = f"{titulo} {dominio} {url_art}"
+                canal = clasificar_canal_evento(texto)
+                impacto = estimar_impacto_evento(texto)
+
+                filas.append({
+                    "fecha": fecha.normalize(),
+                    "categoria": "Noticia GDELT",
+                    "evento": titulo,
+                    "canal": canal,
+                    "impacto_esperado": impacto,
+                    "intensidad": 2,
+                    "comentario": f"Noticia reciente detectada por GDELT. País fuente: {fuente_pais}.",
+                    "fuente": url_art or dominio,
+                })
+
+            if not filas:
+                return pd.DataFrame(columns=["fecha", "categoria", "evento", "canal", "impacto_esperado", "intensidad", "comentario", "fuente"])
+
+            out = pd.DataFrame(filas)
+            out = out.drop_duplicates(subset=["fecha", "evento", "fuente"])
+            return out.sort_values("fecha", ascending=False).reset_index(drop=True)
+
+        except Exception as exc:
+            ultimo_error = str(exc)
+            time.sleep(2 + intento * 2)
+
+    raise RuntimeError(ultimo_error or "No fue posible consultar GDELT.")
 
 
 def unir_eventos_base_y_noticias(eventos_base: pd.DataFrame, noticias: pd.DataFrame) -> pd.DataFrame:
@@ -1114,23 +1133,20 @@ if ejecutar:
                 )
 
                 temas_default = [
-                    "oil price",
-                    "OPEC production cut",
-                    "Red Sea shipping oil",
-                    "Iran Israel oil",
-                    "Russia oil sanctions",
-                    "refinery outage diesel",
-                    "oil tanker attack",
-                    "fuel prices refinery",
+                    '(oil OR petroleum OR gasoline OR diesel) (OPEC OR sanctions OR refinery OR "Red Sea" OR Iran OR Russia)'
                 ]
 
                 st.markdown("#### 2. Consultar GDELT en vivo")
+                st.warning(
+                    "GDELT limita la cantidad de solicitudes. Para evitar error 429, use una sola consulta combinada "
+                    "y un máximo moderado de noticias."
+                )
 
                 with st.form("form_gdelt_consulta"):
                     consulta_gdelt = st.text_area(
                         "Consultas GDELT, una por línea",
                         value="\n".join(temas_default),
-                        help="Use términos en inglés para mejorar la cobertura global de GDELT."
+                        help="Use preferiblemente una sola consulta combinada en inglés para evitar bloqueo 429 de GDELT."
                     )
 
                     col_g1, col_g2 = st.columns(2)
@@ -1144,8 +1160,8 @@ if ejecutar:
                     max_gdelt = col_g2.slider(
                         "Máximo de noticias por consulta",
                         min_value=5,
-                        max_value=250,
-                        value=50,
+                        max_value=100,
+                        value=20,
                         help="Cantidad máxima de artículos a solicitar por cada consulta."
                     )
 
@@ -1173,14 +1189,19 @@ if ejecutar:
                         st.warning("Debe incluir al menos una consulta GDELT.")
 
                     with st.spinner("Consultando GDELT en vivo..."):
-                        for q in consultas:
+                        for idx_q, q in enumerate(consultas):
                             try:
+                                if idx_q > 0:
+                                    time.sleep(4)
                                 tmp = consultar_gdelt_noticias(q, dias=dias_gdelt, max_records=max_gdelt)
                                 if not tmp.empty:
                                     tmp["consulta_gdelt"] = q
                                     noticias_lista.append(tmp)
                             except Exception as exc:
-                                st.warning(f"No fue posible consultar GDELT para: {q}. Detalle: {exc}")
+                                st.warning(
+                                    f"No fue posible consultar GDELT para: {q}. Detalle: {exc}. "
+                                    "Si aparece 429, espere unos minutos y use una sola consulta combinada con menos resultados."
+                                )
 
                     if noticias_lista:
                         noticias_gdelt = pd.concat(noticias_lista, ignore_index=True)
