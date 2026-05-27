@@ -622,7 +622,9 @@ def consultar_gdelt_noticias(query: str, dias: int = 30, max_records: int = 50) 
         fuente_pais = art.get("sourcecountry", "")
         fecha_raw = art.get("seendate", "") or art.get("datetime", "")
 
-        fecha = pd.to_datetime(str(fecha_raw)[:14], format="%Y%m%d%H%M%S", errors="coerce")
+        fecha = pd.to_datetime(fecha_raw, errors="coerce")
+        if pd.isna(fecha):
+            fecha = pd.to_datetime(str(fecha_raw)[:14], format="%Y%m%d%H%M%S", errors="coerce")
         if pd.isna(fecha):
             fecha = pd.to_datetime(str(fecha_raw)[:8], format="%Y%m%d", errors="coerce")
         if pd.isna(fecha):
@@ -1046,6 +1048,39 @@ if ejecutar:
             )
 
             with st.expander("Consultar noticias recientes en GDELT y construir CSV actualizado", expanded=True):
+                st.markdown("#### 1. Base curada vs noticias en vivo")
+                col_base_1, col_base_2 = st.columns(2)
+
+                ultima_base = pd.to_datetime(df_eventos["fecha"], errors="coerce").max() if not df_eventos.empty else pd.NaT
+                col_base_1.metric(
+                    "Última fecha en base curada/cargada",
+                    ultima_base.strftime("%Y-%m-%d") if pd.notna(ultima_base) else "-"
+                )
+
+                if "gdelt_noticias" not in st.session_state:
+                    st.session_state["gdelt_noticias"] = pd.DataFrame()
+                if "gdelt_eventos_actualizados" not in st.session_state:
+                    st.session_state["gdelt_eventos_actualizados"] = pd.DataFrame()
+                if "gdelt_mensaje" not in st.session_state:
+                    st.session_state["gdelt_mensaje"] = ""
+                if "gdelt_consulta_realizada" not in st.session_state:
+                    st.session_state["gdelt_consulta_realizada"] = False
+
+                noticias_guardadas = st.session_state.get("gdelt_noticias", pd.DataFrame())
+                if noticias_guardadas is not None and not noticias_guardadas.empty:
+                    ultima_gdelt = pd.to_datetime(noticias_guardadas["fecha"], errors="coerce").max()
+                    col_base_2.metric(
+                        "Última fecha GDELT consultada en vivo",
+                        ultima_gdelt.strftime("%Y-%m-%d") if pd.notna(ultima_gdelt) else "-"
+                    )
+                else:
+                    col_base_2.metric("Última fecha GDELT consultada en vivo", "Sin consulta")
+
+                st.info(
+                    "La tabla de eventos históricos corresponde a la base curada o al CSV que usted suba. "
+                    "Las noticias GDELT aparecen en una tabla separada después de presionar el botón de consulta."
+                )
+
                 temas_default = [
                     "oil price",
                     "OPEC production cut",
@@ -1053,21 +1088,53 @@ if ejecutar:
                     "Iran Israel oil",
                     "Russia oil sanctions",
                     "refinery outage diesel",
+                    "oil tanker attack",
+                    "fuel prices refinery",
                 ]
-                consulta_gdelt = st.text_area(
-                    "Consultas GDELT, una por línea",
-                    value="\n".join(temas_default),
-                    help="Use términos en inglés para mejorar la cobertura global de GDELT."
-                )
-                col_g1, col_g2 = st.columns(2)
-                dias_gdelt = col_g1.slider("Días hacia atrás", min_value=1, max_value=90, value=30)
-                max_gdelt = col_g2.slider("Máximo de noticias por consulta", min_value=5, max_value=100, value=25)
 
-                if st.button("Actualizar noticias recientes con GDELT"):
+                st.markdown("#### 2. Consultar GDELT en vivo")
+
+                with st.form("form_gdelt_consulta"):
+                    consulta_gdelt = st.text_area(
+                        "Consultas GDELT, una por línea",
+                        value="\n".join(temas_default),
+                        help="Use términos en inglés para mejorar la cobertura global de GDELT."
+                    )
+
+                    col_g1, col_g2 = st.columns(2)
+                    dias_gdelt = col_g1.slider(
+                        "Días hacia atrás",
+                        min_value=1,
+                        max_value=365,
+                        value=30,
+                        help="Aumente este valor si desea buscar noticias en un periodo más amplio."
+                    )
+                    max_gdelt = col_g2.slider(
+                        "Máximo de noticias por consulta",
+                        min_value=5,
+                        max_value=250,
+                        value=50,
+                        help="Cantidad máxima de artículos a solicitar por cada consulta."
+                    )
+
+                    consultar = st.form_submit_button(
+                        "Consultar GDELT ahora",
+                        use_container_width=True
+                    )
+
+                col_limpia_1, col_limpia_2 = st.columns([1, 2])
+                with col_limpia_1:
+                    if st.button("Limpiar resultados GDELT", use_container_width=True):
+                        st.session_state["gdelt_noticias"] = pd.DataFrame()
+                        st.session_state["gdelt_eventos_actualizados"] = pd.DataFrame()
+                        st.session_state["gdelt_mensaje"] = ""
+                        st.session_state["gdelt_consulta_realizada"] = False
+
+                if consultar:
                     consultas = [q.strip() for q in consulta_gdelt.splitlines() if q.strip()]
                     noticias_lista = []
 
-                    with st.spinner("Consultando GDELT..."):
+                    with st.spinner("Consultando GDELT en vivo..."):
                         for q in consultas:
                             try:
                                 tmp = consultar_gdelt_noticias(q, dias=dias_gdelt, max_records=max_gdelt)
@@ -1082,25 +1149,70 @@ if ejecutar:
                         noticias_gdelt = noticias_gdelt.drop_duplicates(subset=["fecha", "evento", "fuente"])
                         eventos_actualizados = unir_eventos_base_y_noticias(df_eventos, noticias_gdelt)
 
-                        st.success(
-                            f"Se incorporaron {len(noticias_gdelt):,.0f} noticias recientes. "
-                            f"El CSV actualizado contiene {len(eventos_actualizados):,.0f} registros."
+                        st.session_state["gdelt_noticias"] = noticias_gdelt
+                        st.session_state["gdelt_eventos_actualizados"] = eventos_actualizados
+                        st.session_state["gdelt_consulta_realizada"] = True
+                        st.session_state["gdelt_mensaje"] = (
+                            f"GDELT devolvió {len(noticias_gdelt):,.0f} noticias recientes. "
+                            f"El CSV combinado contiene {len(eventos_actualizados):,.0f} registros."
+                        )
+                    else:
+                        st.session_state["gdelt_noticias"] = pd.DataFrame()
+                        st.session_state["gdelt_eventos_actualizados"] = pd.DataFrame()
+                        st.session_state["gdelt_consulta_realizada"] = True
+                        st.session_state["gdelt_mensaje"] = (
+                            "GDELT no devolvió noticias para las consultas seleccionadas. "
+                            "Pruebe aumentar los días hacia atrás o usar términos más generales como oil, OPEC, refinery, sanctions."
                         )
 
-                        st.dataframe(noticias_gdelt.sort_values("fecha", ascending=False), use_container_width=True)
+                st.markdown("#### 3. Noticias GDELT consultadas en vivo")
+
+                if st.session_state.get("gdelt_consulta_realizada", False):
+                    noticias_gdelt = st.session_state.get("gdelt_noticias", pd.DataFrame())
+                    eventos_actualizados = st.session_state.get("gdelt_eventos_actualizados", pd.DataFrame())
+
+                    if noticias_gdelt is not None and not noticias_gdelt.empty:
+                        st.success(st.session_state.get("gdelt_mensaje", ""))
+
+                        noticias_mostrar = noticias_gdelt.copy()
+                        noticias_mostrar["fecha"] = pd.to_datetime(noticias_mostrar["fecha"], errors="coerce")
+                        noticias_mostrar = noticias_mostrar.sort_values("fecha", ascending=False)
+
+                        cgd1, cgd2, cgd3 = st.columns(3)
+                        cgd1.metric("Noticias GDELT", f"{len(noticias_mostrar):,.0f}")
+                        cgd2.metric(
+                            "Última noticia GDELT",
+                            noticias_mostrar["fecha"].max().strftime("%Y-%m-%d")
+                        )
+                        cgd3.metric(
+                            "CSV combinado",
+                            f"{len(eventos_actualizados):,.0f} eventos"
+                        )
+
+                        st.dataframe(
+                            noticias_mostrar[
+                                ["fecha", "categoria", "evento", "canal", "impacto_esperado", "intensidad", "fuente", "consulta_gdelt"]
+                            ],
+                            use_container_width=True,
+                            hide_index=True
+                        )
 
                         st.download_button(
-                            "Descargar CSV actualizado con noticias GDELT",
+                            "Descargar CSV combinado actualizado",
                             csv_eventos_descarga(eventos_actualizados),
                             file_name="eventos_geopoliticos_energia_actualizado.csv",
-                            mime="text/csv"
+                            mime="text/csv",
+                            key="download_gdelt_actualizado",
+                            use_container_width=True
                         )
 
                         st.info(
-                            "Para usar esta base actualizada en otra ejecución, descargue el CSV y súbalo en la barra lateral en el campo 'CSV eventos de mercado'."
+                            "Después de descargar el CSV combinado, puede subirlo en la barra lateral en 'CSV eventos de mercado' para que la app use esa base actualizada."
                         )
                     else:
-                        st.warning("GDELT no devolvió noticias para las consultas seleccionadas o no hubo conexión disponible.")
+                        st.warning(st.session_state.get("gdelt_mensaje", "No hay resultados GDELT almacenados."))
+                else:
+                    st.caption("Todavía no se ha ejecutado una consulta GDELT en esta sesión.")
 
             if not backtest.empty:
                 graf_eventos = backtest[["fecha", "precio_eia_bbl", "precio_real_bbl"]].melt(
