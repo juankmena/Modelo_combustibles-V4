@@ -35,7 +35,7 @@ URL_GASOLINA = "https://www.eia.gov/dnav/pet/hist_xls/EMM_EPMR_PTE_NUS_DPGw.xls"
 URL_DIESEL = "https://www.eia.gov/dnav/pet/hist_xls/EMD_EPD2D_PTE_NUS_DPGw.xls"
 HISTORICO_PATH = "historico_predicciones_combustibles.csv"
 RECOPE_PATH = "2016-2026_abril.csv"
-EVENTOS_PATH = "eventos_combustibles_base.csv"
+EVENTOS_PATH = "eventos_geopoliticos_energia_2016_2026.csv"
 
 
 def leer_archivo_eia(url: str, nombre_variable: str) -> pd.DataFrame:
@@ -546,9 +546,12 @@ def cargar_eventos_combustibles(path_o_buffer=None) -> pd.DataFrame:
         path_o_buffer = EVENTOS_PATH
 
     try:
-        ev = pd.read_csv(path_o_buffer, sep=",", encoding="utf-8")
+        ev = pd.read_csv(path_o_buffer, sep=";", encoding="utf-8-sig", on_bad_lines="skip")
     except Exception:
-        ev = pd.read_csv(path_o_buffer, sep=";", encoding="latin1")
+        try:
+            ev = pd.read_csv(path_o_buffer, sep=",", encoding="utf-8-sig", engine="python", on_bad_lines="skip")
+        except Exception:
+            ev = pd.read_csv(path_o_buffer, sep=";", encoding="latin1", on_bad_lines="skip")
 
     ev.columns = [str(c).strip().lower() for c in ev.columns]
     if "fecha" not in ev.columns:
@@ -889,6 +892,7 @@ if ejecutar:
     with tab5:
         st.header("Eventos y noticias relevantes")
         st.caption("Esta sección permite contextualizar movimientos de precios con eventos geopolíticos, logísticos, sociales o de oferta y demanda.")
+        st.caption("La base curada incluida cubre eventos relevantes desde 2016 hasta abril de 2026. También puede cargar un CSV propio desde la barra lateral.")
 
         if error_eventos:
             st.error(f"No fue posible cargar el CSV de eventos: {error_eventos}")
@@ -947,7 +951,7 @@ if ejecutar:
             st.download_button(
                 "Descargar plantilla/base de eventos CSV",
                 df_eventos.to_csv(index=False),
-                file_name="eventos_combustibles_base.csv",
+                file_name="eventos_geopoliticos_energia_2016_2026.csv",
                 mime="text/csv"
             )
 
