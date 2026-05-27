@@ -856,16 +856,21 @@ if ejecutar:
         "6. Histórico y detalles",
     ]
 
+    # Navegación estable: evita que Streamlit regrese visualmente a la primera sección
     if "seccion_activa" not in st.session_state:
         st.session_state["seccion_activa"] = "1. Predicción EIA"
 
-    seccion_activa = st.radio(
-        "Secciones",
+    seccion_actual_previa = st.session_state.get("seccion_activa", "1. Predicción EIA")
+    indice_seccion = secciones_app.index(seccion_actual_previa) if seccion_actual_previa in secciones_app else 0
+
+    seccion_activa = st.selectbox(
+        "Seleccione sección",
         secciones_app,
-        horizontal=True,
-        key="seccion_activa",
-        label_visibility="collapsed"
+        index=indice_seccion,
+        key="selector_seccion_visible"
     )
+
+    st.session_state["seccion_activa"] = seccion_activa
 
     if seccion_activa == "1. Predicción EIA":
         st.header("Predicción con datos EIA")
