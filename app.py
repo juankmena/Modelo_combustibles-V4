@@ -4,6 +4,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import GridSearchCV, cross_val_score
@@ -567,6 +568,121 @@ def cargar_eventos_combustibles(path_o_buffer=None) -> pd.DataFrame:
     return ev
 
 
+def clasificar_canal_evento(texto: str) -> str:
+    t = str(texto).lower()
+    if any(k in t for k in ["opec", "production cut", "output", "supply", "saudi"]):
+        return "oferta"
+    if any(k in t for k in ["red sea", "shipping", "tanker", "suez", "freight", "vessel"]):
+        return "logística"
+    if any(k in t for k in ["iran", "israel", "russia", "ukraine", "war", "attack", "sanction"]):
+        return "geopolítica"
+    if any(k in t for k in ["refinery", "refining", "outage", "shutdown"]):
+        return "refinación"
+    if any(k in t for k in ["demand", "consumption", "china", "recession"]):
+        return "demanda"
+    return "mercado"
+
+
+def estimar_impacto_evento(texto: str) -> str:
+    t = str(texto).lower()
+    alcista = ["cut", "attack", "sanction", "war", "disruption", "outage", "shutdown", "red sea", "risk"]
+    bajista = ["increase output", "raise production", "demand falls", "weak demand", "glut", "surplus"]
+    if any(k in t for k in alcista):
+        return "alcista"
+    if any(k in t for k in bajista):
+        return "bajista"
+    return "por clasificar"
+
+
+def consultar_gdelt_noticias(query: str, dias: int = 30, max_records: int = 50) -> pd.DataFrame:
+    """Consulta noticias recientes en GDELT DOC 2.0 y las transforma al formato de eventos de la app.
+
+    GDELT no requiere API key. La consulta usa el modo ArtList y formato JSON.
+    """
+    url = "https://api.gdeltproject.org/api/v2/doc/doc"
+    params = {
+        "query": query,
+        "mode": "ArtList",
+        "format": "json",
+        "maxrecords": int(max_records),
+        "sort": "DateDesc",
+        "timespan": f"{int(dias)}d",
+    }
+
+    r = requests.get(url, params=params, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    articulos = data.get("articles", [])
+
+    filas = []
+    for art in articulos:
+        titulo = art.get("title", "")
+        url_art = art.get("url", "")
+        dominio = art.get("domain", "")
+        fuente_pais = art.get("sourcecountry", "")
+        fecha_raw = art.get("seendate", "") or art.get("datetime", "")
+
+        fecha = pd.to_datetime(str(fecha_raw)[:14], format="%Y%m%d%H%M%S", errors="coerce")
+        if pd.isna(fecha):
+            fecha = pd.to_datetime(str(fecha_raw)[:8], format="%Y%m%d", errors="coerce")
+        if pd.isna(fecha):
+            continue
+
+        texto = f"{titulo} {dominio} {url_art}"
+        canal = clasificar_canal_evento(texto)
+        impacto = estimar_impacto_evento(texto)
+
+        filas.append({
+            "fecha": fecha.normalize(),
+            "categoria": "Noticia GDELT",
+            "evento": titulo,
+            "canal": canal,
+            "impacto_esperado": impacto,
+            "intensidad": 2,
+            "comentario": f"Noticia reciente detectada por GDELT. País fuente: {fuente_pais}.",
+            "fuente": url_art or dominio,
+        })
+
+    if not filas:
+        return pd.DataFrame(columns=["fecha", "categoria", "evento", "canal", "impacto_esperado", "intensidad", "comentario", "fuente"])
+
+    out = pd.DataFrame(filas)
+    out = out.drop_duplicates(subset=["fecha", "evento", "fuente"])
+    return out.sort_values("fecha", ascending=False).reset_index(drop=True)
+
+
+def unir_eventos_base_y_noticias(eventos_base: pd.DataFrame, noticias: pd.DataFrame) -> pd.DataFrame:
+    columnas = ["fecha", "categoria", "evento", "canal", "impacto_esperado", "intensidad", "comentario", "fuente"]
+
+    base = eventos_base.copy() if eventos_base is not None else pd.DataFrame(columns=columnas)
+    news = noticias.copy() if noticias is not None else pd.DataFrame(columns=columnas)
+
+    for df_tmp in [base, news]:
+        for col in columnas:
+            if col not in df_tmp.columns:
+                df_tmp[col] = ""
+
+    combinado = pd.concat([base[columnas], news[columnas]], ignore_index=True)
+    combinado["fecha"] = pd.to_datetime(combinado["fecha"], errors="coerce")
+    combinado["evento"] = combinado["evento"].astype(str).str.strip()
+    combinado["fuente"] = combinado["fuente"].astype(str).str.strip()
+    combinado["intensidad"] = pd.to_numeric(combinado["intensidad"], errors="coerce").fillna(1).clip(1, 5)
+
+    combinado = combinado.dropna(subset=["fecha"])
+    combinado = combinado[combinado["evento"] != ""]
+    combinado = combinado.drop_duplicates(subset=["fecha", "evento", "fuente"], keep="last")
+    combinado = combinado.sort_values("fecha", ascending=False).reset_index(drop=True)
+
+    return combinado[columnas]
+
+
+def csv_eventos_descarga(df_eventos: pd.DataFrame) -> bytes:
+    salida = df_eventos.copy()
+    if "fecha" in salida.columns:
+        salida["fecha"] = pd.to_datetime(salida["fecha"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return salida.to_csv(index=False, sep=";").encode("utf-8-sig")
+
+
 def filtrar_eventos_periodo(eventos: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
     if eventos.empty or backtest.empty:
         return pd.DataFrame()
@@ -685,7 +801,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Compras Recope")
     archivo_recope = st.file_uploader("CSV compras Recope", type=["csv"], help="Opcional. Si no se carga archivo, la app intenta usar 2016-2026_abril.csv en la carpeta del proyecto.")
-    archivo_eventos = st.file_uploader("CSV eventos de mercado", type=["csv"], help="Opcional. Columnas sugeridas: fecha, categoria, evento, canal, impacto_esperado, intensidad, comentario, fuente.")
+    archivo_eventos = st.file_uploader("CSV eventos de mercado", type=["csv"], help="Opcional. Puede cargar aquí el CSV actualizado descargado desde el tab Eventos y noticias. Columnas: fecha, categoria, evento, canal, impacto_esperado, intensidad, comentario, fuente.")
     producto_recope = st.selectbox(
         "Producto para contraste",
         ["gasolina_regular", "gasolina_super", "diesel", "jet", "glp", "asfalto", "avgas", "bunker"],
@@ -907,6 +1023,69 @@ if ejecutar:
             c2.metric("Intensidad promedio", f"{eventos_filtrados['intensidad'].mean():,.2f}" if not eventos_filtrados.empty else "-")
             c3.metric("Máxima intensidad", f"{eventos_filtrados['intensidad'].max():,.0f}" if not eventos_filtrados.empty else "-")
 
+            st.markdown("### Actualización semiautomática de noticias")
+            st.write(
+                "La app puede consultar noticias recientes en GDELT, unirlas con la base curada y generar un CSV actualizado. "
+                "Como Streamlit Cloud no guarda cambios permanentes en el repositorio, descargue el CSV actualizado y vuelva a subirlo desde la barra lateral en futuras ejecuciones."
+            )
+
+            with st.expander("Consultar noticias recientes en GDELT y construir CSV actualizado"):
+                temas_default = [
+                    "oil price",
+                    "OPEC production cut",
+                    "Red Sea shipping oil",
+                    "Iran Israel oil",
+                    "Russia oil sanctions",
+                    "refinery outage diesel",
+                ]
+                consulta_gdelt = st.text_area(
+                    "Consultas GDELT, una por línea",
+                    value="\n".join(temas_default),
+                    help="Use términos en inglés para mejorar la cobertura global de GDELT."
+                )
+                col_g1, col_g2 = st.columns(2)
+                dias_gdelt = col_g1.slider("Días hacia atrás", min_value=1, max_value=90, value=30)
+                max_gdelt = col_g2.slider("Máximo de noticias por consulta", min_value=5, max_value=100, value=25)
+
+                if st.button("Actualizar noticias recientes con GDELT"):
+                    consultas = [q.strip() for q in consulta_gdelt.splitlines() if q.strip()]
+                    noticias_lista = []
+
+                    with st.spinner("Consultando GDELT..."):
+                        for q in consultas:
+                            try:
+                                tmp = consultar_gdelt_noticias(q, dias=dias_gdelt, max_records=max_gdelt)
+                                if not tmp.empty:
+                                    tmp["consulta_gdelt"] = q
+                                    noticias_lista.append(tmp)
+                            except Exception as exc:
+                                st.warning(f"No fue posible consultar GDELT para: {q}. Detalle: {exc}")
+
+                    if noticias_lista:
+                        noticias_gdelt = pd.concat(noticias_lista, ignore_index=True)
+                        noticias_gdelt = noticias_gdelt.drop_duplicates(subset=["fecha", "evento", "fuente"])
+                        eventos_actualizados = unir_eventos_base_y_noticias(df_eventos, noticias_gdelt)
+
+                        st.success(
+                            f"Se incorporaron {len(noticias_gdelt):,.0f} noticias recientes. "
+                            f"El CSV actualizado contiene {len(eventos_actualizados):,.0f} registros."
+                        )
+
+                        st.dataframe(noticias_gdelt.sort_values("fecha", ascending=False), use_container_width=True)
+
+                        st.download_button(
+                            "Descargar CSV actualizado de eventos",
+                            csv_eventos_descarga(eventos_actualizados),
+                            file_name="eventos_geopoliticos_energia_actualizado.csv",
+                            mime="text/csv"
+                        )
+
+                        st.info(
+                            "Para usar esta base actualizada en otra ejecución, descargue el CSV y súbalo en la barra lateral en el campo 'CSV eventos de mercado'."
+                        )
+                    else:
+                        st.warning("GDELT no devolvió noticias para las consultas seleccionadas o no hubo conexión disponible.")
+
             if not backtest.empty:
                 graf_eventos = backtest[["fecha", "precio_eia_bbl", "precio_real_bbl"]].melt(
                     id_vars="fecha",
@@ -950,7 +1129,7 @@ if ejecutar:
 
             st.download_button(
                 "Descargar plantilla/base de eventos CSV",
-                df_eventos.to_csv(index=False),
+                csv_eventos_descarga(df_eventos),
                 file_name="eventos_geopoliticos_energia_2016_2026.csv",
                 mime="text/csv"
             )
@@ -1008,7 +1187,8 @@ else:
         2. Compras Recope: comportamiento real de importaciones.
         3. Comparación: cercanía entre proxy internacional y compra real.
         4. Análisis técnico: interpretación de errores, brechas y desempeño.
-        5. Histórico: tablas y descargas para revisión.
+        5. Eventos y noticias: consulta GDELT, descarga de CSV actualizado y carga posterior desde la barra lateral.
+        6. Histórico: tablas y descargas para revisión.
         """
     )
     pie_autor()
