@@ -704,6 +704,34 @@ def csv_eventos_descarga(df_eventos: pd.DataFrame) -> bytes:
     return salida.to_csv(index=False, sep=";").encode("utf-8-sig")
 
 
+def cargar_eventos_base_y_usuario(archivo_eventos=None):
+    """Carga base curada y, si el usuario sube CSV, la combina con la base curada.
+
+    Esto evita confusión: el CSV subido no sustituye silenciosamente la base,
+    sino que se integra, se deduplica y se muestra como base efectiva de trabajo.
+    """
+    base = cargar_eventos_combustibles(None)
+
+    if archivo_eventos is None:
+        subido = pd.DataFrame()
+        combinado = base.copy()
+        fuente = "Base curada incluida"
+    else:
+        subido = cargar_eventos_combustibles(archivo_eventos)
+        combinado = unir_eventos_base_y_noticias(base, subido)
+        fuente = "Base curada + CSV subido"
+
+    if combinado is None:
+        combinado = pd.DataFrame()
+
+    if not combinado.empty:
+        combinado["fecha"] = pd.to_datetime(combinado["fecha"], errors="coerce")
+        combinado = combinado.dropna(subset=["fecha"])
+        combinado = combinado.sort_values("fecha", ascending=False).reset_index(drop=True)
+
+    return base, subido, combinado, fuente
+
+
 def filtrar_eventos_periodo(eventos: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
     if eventos.empty or backtest.empty:
         return pd.DataFrame()
@@ -826,7 +854,7 @@ with st.sidebar:
     st.divider()
     st.subheader("Compras Recope")
     archivo_recope = st.file_uploader("CSV compras Recope", type=["csv"], help="Opcional. Si no se carga archivo, la app intenta usar 2016-2026_abril.csv en la carpeta del proyecto.")
-    archivo_eventos = st.file_uploader("CSV eventos de mercado", type=["csv"], help="Opcional. Puede cargar aquí el CSV actualizado descargado desde el tab Eventos y noticias. Columnas: fecha, categoria, evento, canal, impacto_esperado, intensidad, comentario, fuente.")
+    archivo_eventos = st.file_uploader("CSV eventos de mercado", type=["csv"], help="Opcional. Si sube un CSV, la app lo combina con la base curada incluida y elimina duplicados. Columnas esperadas: fecha, categoria, evento, canal, impacto_esperado, intensidad, comentario, fuente.")
     producto_recope = st.selectbox(
         "Producto para contraste",
         ["gasolina_regular", "gasolina_super", "diesel", "jet", "glp", "asfalto", "avgas", "bunker"],
@@ -873,9 +901,12 @@ if ejecutar:
         backtest, etiqueta_eia = pd.DataFrame(), "Sin proxy disponible"
 
     try:
-        df_eventos = cargar_eventos_combustibles(archivo_eventos if archivo_eventos is not None else None)
+        df_eventos_base, df_eventos_subidos, df_eventos, fuente_eventos = cargar_eventos_base_y_usuario(
+            archivo_eventos if archivo_eventos is not None else None
+        )
     except Exception as exc:
-        df_eventos = pd.DataFrame()
+        df_eventos_base, df_eventos_subidos, df_eventos = pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        fuente_eventos = "Error al cargar eventos"
         error_eventos = str(exc)
     else:
         error_eventos = None
@@ -1060,6 +1091,39 @@ if ejecutar:
         st.header("Eventos y noticias relevantes")
         st.caption("Esta sección permite contextualizar movimientos de precios con eventos geopolíticos, logísticos, sociales o de oferta y demanda.")
         st.caption("La base curada incluida cubre eventos relevantes desde 2016 hasta abril de 2026. También puede cargar un CSV propio desde la barra lateral.")
+
+        st.markdown("### Estado de la base de eventos")
+        col_ev_a, col_ev_b, col_ev_c, col_ev_d = st.columns(4)
+        col_ev_a.metric("Fuente usada", fuente_eventos if "fuente_eventos" in locals() else "-")
+        col_ev_b.metric("Eventos base", f"{len(df_eventos_base):,.0f}" if "df_eventos_base" in locals() else "-")
+        col_ev_c.metric("Eventos CSV subido", f"{len(df_eventos_subidos):,.0f}" if "df_eventos_subidos" in locals() else "0")
+        col_ev_d.metric("Eventos combinados", f"{len(df_eventos):,.0f}" if not df_eventos.empty else "0")
+
+        if archivo_eventos is not None:
+            st.success(
+                "CSV de eventos cargado y combinado con la base curada. "
+                "La app está usando la base combinada deduplicada para gráficos y tablas."
+            )
+        else:
+            st.info(
+                "No se ha cargado un CSV externo de eventos. La app está usando la base curada incluida en el proyecto."
+            )
+
+        if not df_eventos.empty:
+            ultima_evento = pd.to_datetime(df_eventos["fecha"], errors="coerce").max()
+            st.caption(
+                f"Última fecha disponible en la base efectiva de eventos: "
+                f"{ultima_evento.strftime('%Y-%m-%d') if pd.notna(ultima_evento) else '-'}"
+            )
+
+        st.download_button(
+            "Descargar CSV combinado/base efectiva de eventos",
+            csv_eventos_descarga(df_eventos),
+            file_name="eventos_geopoliticos_energia_base_efectiva.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
 
         if error_eventos:
             st.error(f"No fue posible cargar el CSV de eventos: {error_eventos}")
@@ -1318,7 +1382,7 @@ if ejecutar:
                 st.dataframe(eventos_filtrados.sort_values("fecha", ascending=False), use_container_width=True)
 
             st.download_button(
-                "Descargar plantilla/base de eventos CSV",
+                "Descargar CSV de eventos",
                 csv_eventos_descarga(df_eventos),
                 file_name="eventos_geopoliticos_energia_2016_2026.csv",
                 mime="text/csv"
