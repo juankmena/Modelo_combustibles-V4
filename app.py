@@ -847,16 +847,27 @@ if ejecutar:
     else:
         error_eventos = None
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    secciones_app = [
         "1. Predicción EIA",
         "2. Compras Recope",
         "3. Comparación",
         "4. Análisis técnico",
         "5. Eventos y noticias",
         "6. Histórico y detalles",
-    ])
+    ]
 
-    with tab1:
+    if "seccion_activa" not in st.session_state:
+        st.session_state["seccion_activa"] = "1. Predicción EIA"
+
+    seccion_activa = st.radio(
+        "Secciones",
+        secciones_app,
+        horizontal=True,
+        key="seccion_activa",
+        label_visibility="collapsed"
+    )
+
+    if seccion_activa == "1. Predicción EIA":
         st.header("Predicción con datos EIA")
         st.caption("Esta sección muestra la predicción del siguiente periodo utilizando datos históricos públicos de EIA.")
         col1, col2, col3, col4 = st.columns(4)
@@ -881,7 +892,7 @@ if ejecutar:
             """
         )
 
-    with tab2:
+    if seccion_activa == "2. Compras Recope":
         st.header("Compras reales de importación Recope")
         st.caption("Esta sección revisa la información real de compras disponible en el CSV suministrado.")
         if error_recope:
@@ -912,7 +923,7 @@ if ejecutar:
                     cols = [c for c in ["fecha_operacion", "producto", "producto_normalizado", "barriles", "precio_fob_bbl", "precio_cif_bbl", "precio_cfr_bbl", "proveedor"] if c in base_prod.columns]
                     st.dataframe(base_prod[cols].sort_values("fecha_operacion", ascending=False).head(100), use_container_width=True)
 
-    with tab3:
+    if seccion_activa == "3. Comparación":
         st.header("Comparación entre proxy EIA y compras Recope")
         st.caption("Esta sección mide qué tan cerca está el proxy de mercado EIA del precio real de importación observado.")
         if backtest.empty:
@@ -960,7 +971,7 @@ if ejecutar:
                 """
             )
 
-    with tab4:
+    if seccion_activa == "4. Análisis técnico":
         st.header("Análisis técnico e interpretación")
         st.caption("Esta sección transforma las métricas en una lectura técnica para el usuario final.")
         if backtest.empty:
@@ -1007,7 +1018,7 @@ if ejecutar:
             fig_cerc.add_hline(y=90, line_dash="dash")
             st.plotly_chart(fig_cerc, use_container_width=True)
 
-    with tab5:
+    if seccion_activa == "5. Eventos y noticias":
         st.header("Eventos y noticias relevantes")
         st.caption("Esta sección permite contextualizar movimientos de precios con eventos geopolíticos, logísticos, sociales o de oferta y demanda.")
         st.caption("La base curada incluida cubre eventos relevantes desde 2016 hasta abril de 2026. También puede cargar un CSV propio desde la barra lateral.")
@@ -1065,6 +1076,8 @@ if ejecutar:
                     st.session_state["gdelt_mensaje"] = ""
                 if "gdelt_consulta_realizada" not in st.session_state:
                     st.session_state["gdelt_consulta_realizada"] = False
+                if "gdelt_ultima_consulta" not in st.session_state:
+                    st.session_state["gdelt_ultima_consulta"] = ""
 
                 noticias_guardadas = st.session_state.get("gdelt_noticias", pd.DataFrame())
                 if noticias_guardadas is not None and not noticias_guardadas.empty:
@@ -1125,14 +1138,20 @@ if ejecutar:
                 col_limpia_1, col_limpia_2 = st.columns([1, 2])
                 with col_limpia_1:
                     if st.button("Limpiar resultados GDELT", use_container_width=True):
+                        st.session_state["seccion_activa"] = "5. Eventos y noticias"
                         st.session_state["gdelt_noticias"] = pd.DataFrame()
                         st.session_state["gdelt_eventos_actualizados"] = pd.DataFrame()
                         st.session_state["gdelt_mensaje"] = ""
                         st.session_state["gdelt_consulta_realizada"] = False
+                        st.session_state["gdelt_ultima_consulta"] = ""
 
                 if consultar:
+                    st.session_state["seccion_activa"] = "5. Eventos y noticias"
+                    st.session_state["gdelt_ultima_consulta"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     consultas = [q.strip() for q in consulta_gdelt.splitlines() if q.strip()]
                     noticias_lista = []
+                    if not consultas:
+                        st.warning("Debe incluir al menos una consulta GDELT.")
 
                     with st.spinner("Consultando GDELT en vivo..."):
                         for q in consultas:
@@ -1166,6 +1185,9 @@ if ejecutar:
                         )
 
                 st.markdown("#### 3. Noticias GDELT consultadas en vivo")
+
+                if st.session_state.get("gdelt_ultima_consulta", ""):
+                    st.caption(f"Última consulta ejecutada en esta sesión: {st.session_state['gdelt_ultima_consulta']}")
 
                 if st.session_state.get("gdelt_consulta_realizada", False):
                     noticias_gdelt = st.session_state.get("gdelt_noticias", pd.DataFrame())
@@ -1262,7 +1284,7 @@ if ejecutar:
                 mime="text/csv"
             )
 
-    with tab6:
+    if seccion_activa == "6. Histórico y detalles":
         st.header("Histórico, matriz y datos técnicos")
         st.caption("Esta sección conserva los detalles del modelo para auditoría, revisión y descarga.")
 
