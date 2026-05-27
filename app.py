@@ -1,8 +1,5 @@
 import os
-import json
 from datetime import datetime
-from urllib.parse import urlencode
-from urllib.request import urlopen, Request
 
 import numpy as np
 import pandas as pd
@@ -11,6 +8,18 @@ import streamlit as st
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.model_selection import GridSearchCV, cross_val_score
 from sklearn.tree import DecisionTreeClassifier
+
+
+def leer_csv_eventos_robusto(ruta):
+    """Lee CSV de eventos con separador ; o , y tolera textos con comas."""
+    import pandas as pd
+    try:
+        return pd.read_csv(ruta, sep=";", encoding="utf-8-sig", on_bad_lines="skip")
+    except Exception:
+        try:
+            return pd.read_csv(ruta, sep=",", encoding="utf-8-sig", engine="python", on_bad_lines="skip")
+        except Exception as e:
+            raise e
 
 st.set_page_config(
     page_title="Modelo combustibles EIA",
@@ -27,7 +36,6 @@ URL_DIESEL = "https://www.eia.gov/dnav/pet/hist_xls/EMD_EPD2D_PTE_NUS_DPGw.xls"
 HISTORICO_PATH = "historico_predicciones_combustibles.csv"
 RECOPE_PATH = "2016-2026_abril.csv"
 EVENTOS_PATH = "eventos_combustibles_base.csv"
-EVENTOS_CURADOS_PATH = "eventos_geopoliticos_energia_2016_2026.csv"
 
 
 def leer_archivo_eia(url: str, nombre_variable: str) -> pd.DataFrame:
@@ -530,16 +538,23 @@ def mostrar_limitaciones():
 
 
 @st.cache_data(show_spinner=False)
-def normalizar_eventos(ev: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza columnas de eventos para que sirvan tanto eventos curados como GDELT."""
-    if ev is None or ev.empty:
-        return pd.DataFrame()
-    ev = ev.copy()
+def cargar_eventos_combustibles(path_o_buffer=None) -> pd.DataFrame:
+    """Carga eventos de mercado. Funciona con archivo incluido o CSV cargado por el usuario."""
+    if path_o_buffer is None:
+        if not os.path.exists(EVENTOS_PATH):
+            return pd.DataFrame()
+        path_o_buffer = EVENTOS_PATH
+
+    try:
+        ev = pd.read_csv(path_o_buffer, sep=",", encoding="utf-8")
+    except Exception:
+        ev = pd.read_csv(path_o_buffer, sep=";", encoding="latin1")
+
     ev.columns = [str(c).strip().lower() for c in ev.columns]
     if "fecha" not in ev.columns:
         return pd.DataFrame()
     ev["fecha"] = pd.to_datetime(ev["fecha"], errors="coerce", dayfirst=True)
-    for col in ["categoria", "evento", "canal", "impacto_esperado", "comentario", "fuente", "url", "origen"]:
+    for col in ["categoria", "evento", "canal", "impacto_esperado", "comentario", "fuente"]:
         if col not in ev.columns:
             ev[col] = ""
     if "intensidad" not in ev.columns:
@@ -548,88 +563,6 @@ def normalizar_eventos(ev: pd.DataFrame) -> pd.DataFrame:
     ev = ev.dropna(subset=["fecha"]).sort_values("fecha").reset_index(drop=True)
     return ev
 
-
-def cargar_eventos_combustibles(path_o_buffer=None) -> pd.DataFrame:
-    """Carga eventos manuales/curados. Funciona con archivo incluido o CSV cargado por el usuario."""
-    if path_o_buffer is None:
-        if os.path.exists(EVENTOS_CURADOS_PATH):
-            path_o_buffer = EVENTOS_CURADOS_PATH
-        elif os.path.exists(EVENTOS_PATH):
-            path_o_buffer = EVENTOS_PATH
-        else:
-            return pd.DataFrame()
-
-    try:
-        ev = pd.read_csv(path_o_buffer, sep=",", encoding="utf-8")
-    except Exception:
-        ev = pd.read_csv(path_o_buffer, sep=";", encoding="latin1")
-    return normalizar_eventos(ev)
-
-
-@st.cache_data(show_spinner=False, ttl=60 * 60)
-def consultar_gdelt_eventos(query: str, timespan: str = "3d", maxrecords: int = 50) -> pd.DataFrame:
-    """Consulta opcional a GDELT DOC 2.0 sin clave API.
-
-    Se usa como complemento reciente. Si GDELT no responde, si Streamlit Cloud bloquea la salida,
-    o si cambia el formato de la respuesta, la app devuelve DataFrame vacío y continúa funcionando.
-    """
-    query = (query or "").strip()
-    if not query:
-        return pd.DataFrame()
-    maxrecords = int(max(1, min(maxrecords, 250)))
-    params = {
-        "query": query,
-        "mode": "ArtList",
-        "format": "json",
-        "maxrecords": maxrecords,
-        "sort": "datedesc",
-        "timespan": timespan,
-    }
-    url = "https://api.gdeltproject.org/api/v2/doc/doc?" + urlencode(params)
-    try:
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0 Streamlit combustible observatorio"})
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except Exception:
-        return pd.DataFrame()
-
-    articulos = data.get("articles", []) if isinstance(data, dict) else []
-    filas = []
-    for art in articulos:
-        titulo = art.get("title", "")
-        fecha = art.get("seendate", "")
-        dominio = art.get("domain", "GDELT")
-        url_art = art.get("url", "")
-        sourcecountry = art.get("sourcecountry", "")
-        language = art.get("language", "")
-        filas.append({
-            "fecha": fecha,
-            "categoria": "Noticia GDELT",
-            "evento": titulo,
-            "canal": "noticias/geopolítica/mercado",
-            "impacto_esperado": "Contexto reciente; requiere interpretación técnica",
-            "intensidad": 2,
-            "comentario": f"Fuente: {dominio}. País fuente: {sourcecountry}. Idioma: {language}.",
-            "fuente": dominio,
-            "url": url_art,
-            "origen": "GDELT automático",
-        })
-    return normalizar_eventos(pd.DataFrame(filas))
-
-
-def combinar_eventos(eventos_curados: pd.DataFrame, eventos_gdelt: pd.DataFrame) -> pd.DataFrame:
-    partes = [x for x in [eventos_curados, eventos_gdelt] if x is not None and not x.empty]
-    if not partes:
-        return pd.DataFrame()
-    out = pd.concat(partes, ignore_index=True)
-    out = normalizar_eventos(out)
-    if not out.empty:
-        out["_key"] = (
-            out["fecha"].dt.strftime("%Y-%m-%d") + "|" +
-            out["evento"].astype(str).str.lower().str.strip().str[:120]
-        )
-        out = out.drop_duplicates("_key").drop(columns=["_key"])
-    return out.sort_values("fecha").reset_index(drop=True)
 
 def filtrar_eventos_periodo(eventos: pd.DataFrame, backtest: pd.DataFrame) -> pd.DataFrame:
     if eventos.empty or backtest.empty:
@@ -750,14 +683,6 @@ with st.sidebar:
     st.subheader("Compras Recope")
     archivo_recope = st.file_uploader("CSV compras Recope", type=["csv"], help="Opcional. Si no se carga archivo, la app intenta usar 2016-2026_abril.csv en la carpeta del proyecto.")
     archivo_eventos = st.file_uploader("CSV eventos de mercado", type=["csv"], help="Opcional. Columnas sugeridas: fecha, categoria, evento, canal, impacto_esperado, intensidad, comentario, fuente.")
-    usar_gdelt = st.checkbox("Agregar noticias recientes desde GDELT", value=False, help="Consulta opcional sin API key. Si no hay internet o GDELT no responde, la app sigue usando eventos curados/CSV.")
-    consulta_gdelt = st.text_input(
-        "Consulta GDELT",
-        value='("oil price" OR OPEC OR refinery OR sanctions OR "Red Sea" OR "Middle East" OR Russia OR Iran) energy',
-        help="Consulta en inglés para recuperar noticias recientes vinculadas con energía, geopolítica y combustibles."
-    )
-    periodo_gdelt = st.selectbox("Ventana GDELT", ["1d", "3d", "7d", "14d", "1m", "3m"], index=2)
-    max_gdelt = st.slider("Máximo noticias GDELT", 10, 100, 30, 10)
     producto_recope = st.selectbox(
         "Producto para contraste",
         ["gasolina_regular", "gasolina_super", "diesel", "jet", "glp", "asfalto", "avgas", "bunker"],
@@ -794,19 +719,12 @@ if ejecutar:
         backtest, etiqueta_eia = pd.DataFrame(), "Sin proxy disponible"
 
     try:
-        eventos_curados = cargar_eventos_combustibles(archivo_eventos if archivo_eventos is not None else None)
+        df_eventos = cargar_eventos_combustibles(archivo_eventos if archivo_eventos is not None else None)
     except Exception as exc:
-        eventos_curados = pd.DataFrame()
+        df_eventos = pd.DataFrame()
         error_eventos = str(exc)
     else:
         error_eventos = None
-
-    if usar_gdelt:
-        eventos_gdelt = consultar_gdelt_eventos(consulta_gdelt, periodo_gdelt, max_gdelt)
-    else:
-        eventos_gdelt = pd.DataFrame()
-
-    df_eventos = combinar_eventos(eventos_curados, eventos_gdelt)
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "1. Predicción EIA",
@@ -969,13 +887,13 @@ if ejecutar:
             st.plotly_chart(fig_cerc, use_container_width=True)
 
     with tab5:
-        st.header("Eventos geopolíticos, sociales y noticias recientes")
-        st.caption("Módulo híbrido: combina una base histórica curada con noticias recientes consultadas opcionalmente en GDELT.")
+        st.header("Eventos y noticias relevantes")
+        st.caption("Esta sección permite contextualizar movimientos de precios con eventos geopolíticos, logísticos, sociales o de oferta y demanda.")
 
         if error_eventos:
             st.error(f"No fue posible cargar el CSV de eventos: {error_eventos}")
         elif df_eventos.empty:
-            st.warning("No se encontraron eventos curados ni noticias recientes. Podés cargar un CSV o activar GDELT en la barra lateral.")
+            st.warning("No se encontró archivo de eventos. La app incluye una plantilla CSV que podés ampliar o reemplazar desde la barra lateral.")
         else:
             eventos_filtrados = filtrar_eventos_periodo(df_eventos, backtest) if not backtest.empty else df_eventos.copy()
             st.info(texto_eventos_interpretacion(eventos_filtrados))
@@ -984,9 +902,6 @@ if ejecutar:
             c1.metric("Eventos en periodo", f"{len(eventos_filtrados):,.0f}")
             c2.metric("Intensidad promedio", f"{eventos_filtrados['intensidad'].mean():,.2f}" if not eventos_filtrados.empty else "-")
             c3.metric("Máxima intensidad", f"{eventos_filtrados['intensidad'].max():,.0f}" if not eventos_filtrados.empty else "-")
-            if "origen" in eventos_filtrados.columns and not eventos_filtrados.empty:
-                resumen_origen = eventos_filtrados["origen"].replace("", "CSV/curado").value_counts().to_dict()
-                st.caption("Origen de eventos: " + ", ".join([f"{k}: {v}" for k, v in resumen_origen.items()]))
 
             if not backtest.empty:
                 graf_eventos = backtest[["fecha", "precio_eia_bbl", "precio_real_bbl"]].melt(
@@ -1021,10 +936,7 @@ if ejecutar:
                 """
                 ### Cómo interpretar esta sección
 
-                Los eventos no se tratan como una prueba causal automática. Su función es aportar contexto a movimientos de precios, especialmente en periodos de alta volatilidad.
-                
-                La base curada recoge eventos históricos relevantes —guerras, sanciones, decisiones OPEP+, ataques a infraestructura, disrupciones marítimas y fenómenos climáticos—. GDELT complementa con noticias recientes, pero sus resultados deben revisarse porque son una señal informativa, no una validación causal.
-                
+                Los eventos no se tratan como una prueba causal automática. Su función es aportar contexto a movimientos de precios, especialmente en periodos de alta volatilidad. 
                 Un evento puede afectar precios por distintos canales: oferta, demanda, logística, geopolítica, inventarios, refinación o expectativas del mercado.
                 """
             )
@@ -1033,9 +945,9 @@ if ejecutar:
                 st.dataframe(eventos_filtrados.sort_values("fecha", ascending=False), use_container_width=True)
 
             st.download_button(
-                "Descargar eventos combinados CSV",
+                "Descargar plantilla/base de eventos CSV",
                 df_eventos.to_csv(index=False),
-                file_name="eventos_combustibles_hibrido.csv",
+                file_name="eventos_combustibles_base.csv",
                 mime="text/csv"
             )
 
@@ -1092,8 +1004,7 @@ else:
         2. Compras Recope: comportamiento real de importaciones.
         3. Comparación: cercanía entre proxy internacional y compra real.
         4. Análisis técnico: interpretación de errores, brechas y desempeño.
-        5. Eventos y noticias: contexto geopolítico, social, logístico y de mercado.
-        6. Histórico: tablas y descargas para revisión.
+        5. Histórico: tablas y descargas para revisión.
         """
     )
     pie_autor()
